@@ -12,6 +12,8 @@ import { useGame } from '../context/GameContext';
 import { ACTIONS } from '../context/GameContext';
 import { HEADHUNTING_FEE } from '../utils/gameLogic';
 import { Employee } from '../types';
+import { useResumeContent } from '../hooks/useResumeContent';
+import { v4 as uuidv4 } from 'uuid';
 
 // 像素风格的文本
 const PixelText = styled(Typography)({
@@ -45,9 +47,14 @@ const ResumeCard = styled(Box)({
 });
 
 export const ResumeList: React.FC = () => {
-    const { state, dispatch } = useGame();
+    const context = useGame();
+    if (!context) {
+        throw new Error('ResumeList must be used within a GameProvider');
+    }
+    const { state, dispatch } = context;
+    const { generateContent } = useResumeContent();
 
-    const handleRevealResume = (resume: Employee) => {
+    const handleRevealResume = async (resume: Employee) => {
         const fee = HEADHUNTING_FEE[resume.experienceLevel];
         if (state.company.capital >= fee) {
             dispatch({
@@ -57,12 +64,22 @@ export const ResumeList: React.FC = () => {
                     fee: fee
                 }
             });
+
+            // 生成简历内容
+            await generateContent(
+                resume.id,
+                resume.experienceLevel,
+                resume.education,
+                fee
+            );
         } else {
             dispatch({
                 type: ACTIONS.ADD_NOTIFICATION,
                 payload: {
-                    type: 'error',
-                    message: '资金不足，无法支付猎头费用！'
+                    type: 'error' as const,
+                    message: '资金不足，无法支付猎头费用！',
+                    id: uuidv4(),
+                    timestamp: Date.now()
                 }
             });
         }
@@ -73,8 +90,10 @@ export const ResumeList: React.FC = () => {
             dispatch({
                 type: ACTIONS.ADD_NOTIFICATION,
                 payload: {
-                    type: 'warning',
-                    message: '请先查看简历详情！'
+                    type: 'warning' as const,
+                    message: '请先查看简历详情！',
+                    id: uuidv4(),
+                    timestamp: Date.now()
                 }
             });
             return;
@@ -88,7 +107,7 @@ export const ResumeList: React.FC = () => {
 
     return (
         <Box>
-            {state.availableResumes.map((resume) => (
+            {state.availableResumes.map((resume: Employee) => (
                 <ResumeCard key={resume.id}>
                     {/* 基本信息（始终显示） */}
                     <PixelText>
@@ -111,8 +130,8 @@ export const ResumeList: React.FC = () => {
                             <PixelText>
                                 技能:
                             </PixelText>
-                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
-                                {resume.skills.map((skill, index) => (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                                {resume.skills.map((skill: string, index: number) => (
                                     <Chip
                                         key={index}
                                         label={skill}
@@ -130,6 +149,19 @@ export const ResumeList: React.FC = () => {
                             <PixelText>
                                 工作效率: {(resume.efficiency * 100).toFixed(0)}%
                             </PixelText>
+                            {resume.personality && (
+                                <>
+                                    <PixelText>
+                                        性格特点: {resume.personality.traits.join(', ')}
+                                    </PixelText>
+                                    <PixelText>
+                                        工作态度: {resume.personality.workAttitude}
+                                    </PixelText>
+                                    <PixelText>
+                                        职业规划: {resume.personality.careerPlan}
+                                    </PixelText>
+                                </>
+                            )}
                             <PixelButton
                                 variant="contained"
                                 color="primary"

@@ -14,6 +14,11 @@ export interface Employee {
     slacking: number; // 摸鱼倾向 (0-100)
     daysInPool: number; // 简历在候选池中的天数
     isRevealed: boolean; // 是否已查看简历
+    personality?: {
+        traits: string[];
+        workAttitude: string;
+        careerPlan: string;
+    };
 }
 
 export interface Achievement {

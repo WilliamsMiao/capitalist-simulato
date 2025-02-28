@@ -1,13 +1,40 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
-import { GameState, GameAction, Employee, RandomEvent, TrainingProgram, RandomEventEffect } from '../types';
+import React, { createContext, useContext, useReducer, ReactNode, Dispatch, useCallback, useEffect } from 'react';
+import { Employee, RandomEvent, TrainingProgram, RandomEventEffect, Notification, SavedGame, Company } from '../types';
 import { generateMultipleResumes, calculateDailyExpenses, calculateDailyIncome, calculateResumeScore, calculateRefreshProbability, BASE_SALARY, EDUCATION_BONUS } from '../utils/gameLogic';
 import { ACHIEVEMENTS } from '../utils/achievements';
 import { generateRandomEvent, shouldTriggerEvent } from '../utils/events';
 import { TRAINING_PROGRAMS } from '../utils/training';
 import { v4 as uuidv4 } from 'uuid';
+import { generateResumeContent } from '../services/ollamaService';
 
-// 初始状态
-const initialState: GameState = {
+// 定义 GameContext 的类型
+type GameContextType = {
+    state: GameState;
+    dispatch: Dispatch<GameAction>;
+};
+
+// 创建 GameContext 时指定类型
+const GameContext = createContext<GameContextType | null>(null);
+
+// 修改 GameState 类型
+export interface GameState {
+    company: Company;
+    availableResumes: Employee[];
+    isRunning: boolean;
+    gameSpeed: number;
+    notifications: Notification[];
+    savedGames: SavedGame[];
+    isProcessingDay: boolean;
+}
+
+// 添加 GameAction 类型
+export interface GameAction {
+    type: string;
+    payload?: any;
+}
+
+// 修改初始状态
+export const initialState: GameState = {
     company: {
         capital: 10000,
         employees: [],
@@ -23,7 +50,8 @@ const initialState: GameState = {
     isRunning: true,
     gameSpeed: 1,
     notifications: [],
-    savedGames: []
+    savedGames: [],
+    isProcessingDay: false // 初始化加载状态
 };
 
 // Action Types
@@ -38,7 +66,9 @@ export const ACTIONS = {
     END_GAME: 'END_GAME',
     SET_GAME_SPEED: 'SET_GAME_SPEED',
     ADD_NOTIFICATION: 'ADD_NOTIFICATION',
-    REVEAL_RESUME: 'REVEAL_RESUME'
+    REVEAL_RESUME: 'REVEAL_RESUME',
+    UPDATE_RESUME_CONTENT: 'UPDATE_RESUME_CONTENT',
+    PROCESS_DAY_COMPLETE: 'PROCESS_DAY_COMPLETE'
 } as const;
 
 // Reducer
@@ -172,40 +202,40 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
             // 增加事件触发概率
             if (shouldTriggerEvent(newCompany.day) && newCompany.activeEvents.length === 0) {
-                const shouldGenerateEvent = Math.random() < 0.25; // 提高事件触发概率
+                const shouldGenerateEvent = Math.random() < 0.25;
                 if (shouldGenerateEvent) {
                     newCompany.activeEvents = [generateRandomEvent()];
                 }
             }
 
-            // 处理现有简历
+            // 处理简历池更新
+            const shouldAddNewResumes = Math.random() < 0.5;
             const newAvailableResumes = state.availableResumes
                 .map(resume => ({
                     ...resume,
                     daysInPool: resume.daysInPool + 1
                 }))
                 .filter(resume => {
-                    // 移除在池中超过2天的简历
                     if (resume.daysInPool >= 2) return false;
-                    
-                    // 根据分数决定是否保留
                     const score = calculateResumeScore(resume);
-                    return Math.random() >= 0.3; // 固定30%的基础刷新概率
+                    return Math.random() >= 0.3;
                 });
 
-            // 生成新简历
-            const shouldAddNewResumes = Math.random() < 0.5; // 降低生成新简历的概率到50%
-            const newResumes = shouldAddNewResumes 
-                ? generateMultipleResumes(Math.floor(Math.random() * 2) + 1) // 生成1-2份新简历
-                : [];
-
-            // 合并现有简历和新简历，总数不超过3份
-            const combinedResumes = [...newAvailableResumes, ...newResumes].slice(0, 3);
-
+            // 返回带有加载状态的中间状态
             return {
                 ...state,
                 company: newCompany,
-                availableResumes: combinedResumes
+                availableResumes: newAvailableResumes,
+                isProcessingDay: true, // 设置加载状态
+                notifications: [
+                    ...state.notifications,
+                    {
+                        id: uuidv4(),
+                        type: 'info' as const,
+                        message: '正在处理新的一天...',
+                        timestamp: Date.now()
+                    }
+                ].slice(-5)
             };
         }
 
@@ -365,8 +395,23 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
         case ACTIONS.REVEAL_RESUME: {
             const { resumeId, fee } = action.payload;
+            const resume = state.availableResumes.find(r => r.id === resumeId);
             
-            // 检查资金是否足够
+            if (!resume) {
+                return {
+                    ...state,
+                    notifications: [
+                        ...state.notifications,
+                        {
+                            id: uuidv4(),
+                            type: 'error' as const,
+                            message: '简历不存在',
+                            timestamp: Date.now()
+                        }
+                    ].slice(-5)
+                };
+            }
+
             if (state.company.capital < fee) {
                 return {
                     ...state,
@@ -375,31 +420,60 @@ function gameReducer(state: GameState, action: GameAction): GameState {
                         {
                             id: uuidv4(),
                             type: 'error' as const,
-                            message: '资金不足，无法支付猎头费用！',
+                            message: '资金不足，无法支付猎头费用',
                             timestamp: Date.now()
                         }
                     ].slice(-5)
                 };
             }
 
-            // 更新简历状态和公司资金
+            // 立即返回状态更新
             return {
                 ...state,
                 company: {
                     ...state.company,
                     capital: state.company.capital - fee
                 },
-                availableResumes: state.availableResumes.map(resume =>
-                    resume.id === resumeId
-                        ? { ...resume, isRevealed: true }
-                        : resume
+                availableResumes: state.availableResumes.map(r =>
+                    r.id === resumeId ? { ...r, isRevealed: true } : r
                 ),
                 notifications: [
                     ...state.notifications,
                     {
                         id: uuidv4(),
+                        type: 'info' as const,
+                        message: '正在生成简历内容...',
+                        timestamp: Date.now()
+                    }
+                ].slice(-5)
+            };
+        }
+
+        case ACTIONS.UPDATE_RESUME_CONTENT: {
+            const { resumeId, content, fee } = action.payload;
+            return {
+                ...state,
+                availableResumes: state.availableResumes.map(resume =>
+                    resume.id === resumeId
+                        ? { ...resume, ...content }
+                        : resume
+                )
+            };
+        }
+
+        case ACTIONS.PROCESS_DAY_COMPLETE: {
+            const { company, availableResumes } = action.payload;
+            return {
+                ...state,
+                company,
+                availableResumes,
+                isProcessingDay: false, // 重置加载状态
+                notifications: [
+                    ...state.notifications,
+                    {
+                        id: uuidv4(),
                         type: 'success' as const,
-                        message: '已支付猎头费用，查看简历详情',
+                        message: '新的一天开始了！',
                         timestamp: Date.now()
                     }
                 ].slice(-5)
@@ -411,15 +485,62 @@ function gameReducer(state: GameState, action: GameAction): GameState {
     }
 }
 
-// Context
-const GameContext = createContext<{
-    state: GameState;
-    dispatch: React.Dispatch<GameAction>;
-} | undefined>(undefined);
-
 // Provider Component
 export function GameProvider({ children }: { children: ReactNode }) {
     const [state, dispatch] = useReducer(gameReducer, initialState);
+
+    // 监听状态变化，处理新的一天
+    useEffect(() => {
+        if (state.company.day > 1 && state.isProcessingDay) {
+            const shouldAddNewResumes = Math.random() < 0.5;
+            
+            if (shouldAddNewResumes) {
+                const count = Math.floor(Math.random() * 2) + 1;
+                const newResumes = generateMultipleResumes(count);
+                
+                Promise.all(
+                    newResumes.map(async (resume) => {
+                        try {
+                            const content = await generateResumeContent(
+                                resume.experienceLevel,
+                                resume.education
+                            );
+                            return { ...resume, ...content };
+                        } catch (error) {
+                            console.error('生成简历内容失败:', error);
+                            return resume;
+                        }
+                    })
+                ).then(completedResumes => {
+                    const combinedResumes = [...state.availableResumes, ...completedResumes].slice(0, 3);
+                    dispatch({
+                        type: ACTIONS.PROCESS_DAY_COMPLETE,
+                        payload: {
+                            company: state.company,
+                            availableResumes: combinedResumes
+                        }
+                    });
+                }).catch(error => {
+                    console.error('处理新简历失败:', error);
+                    dispatch({
+                        type: ACTIONS.PROCESS_DAY_COMPLETE,
+                        payload: {
+                            company: state.company,
+                            availableResumes: state.availableResumes
+                        }
+                    });
+                });
+            } else {
+                dispatch({
+                    type: ACTIONS.PROCESS_DAY_COMPLETE,
+                    payload: {
+                        company: state.company,
+                        availableResumes: state.availableResumes
+                    }
+                });
+            }
+        }
+    }, [state.company.day, state.isProcessingDay]);
 
     return (
         <GameContext.Provider value={{ state, dispatch }}>
@@ -429,9 +550,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
 }
 
 // Custom Hook
-export function useGame() {
+export function useGame(): GameContextType {
     const context = useContext(GameContext);
-    if (context === undefined) {
+    if (!context) {
         throw new Error('useGame must be used within a GameProvider');
     }
     return context;

@@ -11,7 +11,7 @@ import {
     Paper
 } from '@mui/material';
 import { useGame } from './context/GameContext';
-import { ACTIONS } from './context/GameContext';
+import { ACTIONS, initialState } from './context/GameContext';
 import { GameProvider } from './context/GameContext';
 import { CompanyStatus } from './components/CompanyStatus';
 import { GameControls } from './components/GameControls';
@@ -21,6 +21,7 @@ import { TrainingDialog } from './components/TrainingDialog';
 import { AchievementList } from './components/AchievementList';
 import { SaveGameDialog } from './components/SaveGameDialog';
 import { GameSummaryDialog } from './components/GameSummaryDialog';
+import { LoadingOverlay } from './components/LoadingOverlay';
 
 // 像素风格的按钮
 const PixelButton = styled(Button)(({ theme }) => ({
@@ -104,6 +105,8 @@ const GameApp: React.FC = () => {
     const handleGameSummaryClose = () => {
         setShowGameSummary(false);
         setShowMenu(true);
+        // 重置游戏状态
+        dispatch({ type: ACTIONS.LOAD_GAME, payload: initialState });
     };
 
     // 主菜单界面
@@ -212,7 +215,11 @@ const GameApp: React.FC = () => {
     );
 
     return (
-        <Box>
+        <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+            <LoadingOverlay 
+                isLoading={state.isProcessingDay} 
+                message="正在处理新的一天..."
+            />
             {showMenu ? <MainMenu /> : <GameInterface />}
 
             {/* 对话框和通知 */}
